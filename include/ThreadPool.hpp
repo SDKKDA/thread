@@ -1,16 +1,21 @@
 #ifndef _THREADPOOL
 #define _THREADPOOL
+#include "Task.hpp"
 #include "ThreadSafeQueue.hpp"
+#include <algorithm>
 #include <functional>
+#include <map>
 #include <memory>
 #include <thread>
 #include <vector>
 
-namespace jz {
-class thread_pool {
+namespace jz
+{
+template < typename Task_Queue >
+class thread_pool
+{
 public:
-    using task       = std::function< void() >;
-    using task_queue = thread_safe_queue< task >;
+    using task_queue = Task_Queue;
 
 public:
     thread_pool( const thread_pool& )            = delete;
@@ -19,20 +24,32 @@ public:
     thread_pool& operator=( thread_pool&& )      = delete;
 
 public:
-    explicit thread_pool( const size_t threads_count = std::thread::hardware_concurrency() - 1 ) : is_stop_( false ), threads_count_( threads_count ), threads( threads_count ) {}
+    explicit thread_pool( const size_t threads_count = std::thread::hardware_concurrency() - 1 ) : is_stop_( false ), threads_count_( threads_count ) {}
     ~thread_pool() {
-        is_stop_ = false;
-        for ( auto& t : threads ) {
+        {
+            std::unique_lock< std::mutex > ul( tasks_.get_lock() );
+            is_stop_ = true;
+        }
+        tasks_.notify_all();
+        std::for_each( threads_.cbegin(), threads_.cend(), []( const std::shared_ptr< std::thread >& t ) {
             if ( t->joinable() ) {
                 t->join();
             }
-        }
+        } );
     }
     void start() {
         create_threads( threads_count_ );
     }
-    void add_task( task&& t ) {
-        tasks_.push( std::move( t ) );
+    template < typename Func, typename... Args >
+    decltype( auto ) add_task( Func&& t, Args... args ) {
+        using retType = typename std::result_of< Func( Args... ) >::type;
+
+        auto f    = std::bind( std::forward< Func >( t ), std::forward< Args >( args )... );
+        auto task = std::make_shared< std::packaged_task< retType() > >( f );
+
+        typename task_queue::value_type tt( [ = ]() { ( *task )(); } );
+        tasks_.push( std::move( tt ) );
+        return task->get_future();
     }
 
 private:
@@ -40,12 +57,17 @@ private:
         for ( size_t i = 0; i < n; ++i ) {
             auto t = std::make_shared< std::thread >( [ this ]() {
                 while ( !is_stop_ ) {
-                    auto task = tasks_.pop();
-                    std::cout << "thread id :" << std::this_thread::get_id() << " run task" << std::endl;
-                    task();
+                    if ( !tasks_.empty() ) {
+                        auto tasks = tasks_.get_data();
+                        while ( !tasks.empty() ) {
+                            auto t = tasks.front();
+                            tasks.pop();
+                            t();
+                        }
+                    }
                 }
             } );
-            threads.emplace_back( std::move( t ) );
+            threads_.emplace_back( std::move( t ) );
         }
     }
 
@@ -54,7 +76,7 @@ private:
     task_queue tasks_;
     size_t     threads_count_;
 
-    std::vector< std::shared_ptr< std::thread > > threads;
+    std::vector< std::shared_ptr< std::thread > > threads_;
 };
 }  // namespace jz
 #endif

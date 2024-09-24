@@ -25,10 +25,7 @@ private:
 private:
     static Singleton* m_singleton;
 
-public:
+private:
     static std::mutex m_mutex;
 };
-Singleton* Singleton::m_singleton = nullptr;
-
-std::mutex Singleton::m_mutex;
 }  // namespace jz
