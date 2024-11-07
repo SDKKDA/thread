@@ -11,11 +11,11 @@
 
 namespace jz
 {
-template < typename Task_Queue >
 class thread_pool
 {
 public:
-    using task_queue = Task_Queue;
+    using task       = std::function< void() >;
+    using task_queue = thread_safe_queue< task >;
 
 public:
     thread_pool( const thread_pool& )            = delete;
@@ -26,19 +26,24 @@ public:
 public:
     explicit thread_pool( const size_t threads_count = std::thread::hardware_concurrency() - 1 ) : is_stop_( false ), threads_count_( threads_count ) {}
     ~thread_pool() {
+        if ( !is_stop_ ) {
+            stop();
+        }
+    }
+    void start() {
+        create_threads( threads_count_ );
+    }
+    void stop() {
         {
             std::unique_lock< std::mutex > ul( tasks_.get_lock() );
             is_stop_ = true;
         }
-        tasks_.notify_all();
-        std::for_each( threads_.cbegin(), threads_.cend(), []( const std::shared_ptr< std::thread >& t ) {
+        tasks_.get_cond().notify_all();
+        std::for_each( threads_.cbegin(), threads_.cend(), []( const std::unique_ptr< std::thread >& t ) {
             if ( t->joinable() ) {
                 t->join();
             }
         } );
-    }
-    void start() {
-        create_threads( threads_count_ );
     }
     template < typename Func, typename... Args >
     decltype( auto ) add_task( Func&& t, Args... args ) {
@@ -55,13 +60,14 @@ public:
 private:
     void create_threads( const size_t n ) {
         for ( size_t i = 0; i < n; ++i ) {
-            auto t = std::make_shared< std::thread >( [ this ]() {
+            auto t = std::make_unique< std::thread >( [ this ]() {
                 while ( !is_stop_ ) {
                     if ( !tasks_.empty() ) {
                         auto tasks = tasks_.get_data();
                         while ( !tasks.empty() ) {
                             auto t = tasks.front();
                             tasks.pop();
+                            std::cout << "i am thread:" << std::this_thread::get_id() << std::endl;
                             t();
                         }
                     }
@@ -76,7 +82,7 @@ private:
     task_queue tasks_;
     size_t     threads_count_;
 
-    std::vector< std::shared_ptr< std::thread > > threads_;
+    std::vector< std::unique_ptr< std::thread > > threads_;
 };
 }  // namespace jz
 #endif

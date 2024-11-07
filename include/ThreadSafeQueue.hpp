@@ -31,16 +31,19 @@ public:
         std::swap( data_, other.data_ );
     }
     void push( const value_type& value ) {
-        std::lock_guard< std::mutex > lg( mutex_ );
-        data_.emplace( value );
+        {
+            std::lock_guard< std::mutex > lg( mutex_ );
+            data_.emplace( value );
+        }
         // std::cout << "notify_one" << std::endl;
 
         cond_.notify_one();
     }
     void push( value_type&& value ) {
-
-        std::lock_guard< std::mutex > lg( mutex_ );
-        data_.emplace( std::move( value ) );
+        {
+            std::lock_guard< std::mutex > lg( mutex_ );
+            data_.emplace( std::move( value ) );
+        }
         // std::cout << "notify_one" << std::endl;
 
         cond_.notify_one();
@@ -54,7 +57,7 @@ public:
         return value;
     }
     void pop( reference value ) {
-        value = std::move( pop() );
+        value = std::move( this->pop() );
     }
 
     bool empty() const {
@@ -72,8 +75,8 @@ public:
         std::swap( new_queue, data_ );
         return new_queue;
     }
-    void notify_all() {
-        cond_.notify_all();
+    std::condition_variable& get_cond() {
+        return cond_;
     }
     std::mutex& get_lock() {
         return mutex_;
