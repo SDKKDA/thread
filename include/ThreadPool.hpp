@@ -4,8 +4,6 @@
 #include "ThreadSafeQueue.hpp"
 #include <algorithm>
 #include <functional>
-#include <map>
-#include <memory>
 #include <thread>
 #include <vector>
 
@@ -24,7 +22,9 @@ public:
     thread_pool& operator=( thread_pool&& )      = delete;
 
 public:
-    explicit thread_pool( const size_t threads_count = std::thread::hardware_concurrency() - 1 ) : is_stop_( false ), threads_count_( threads_count ) {}
+    explicit thread_pool( const size_t threads_count = std::thread::hardware_concurrency() - 1 ) : is_stop_( false ), threads_count_( threads_count ) {
+        threads_.resize( threads_count );
+    }
     ~thread_pool() {
         if ( !is_stop_ ) {
             stop();
@@ -39,9 +39,9 @@ public:
             is_stop_ = true;
         }
         tasks_.get_cond().notify_all();
-        std::for_each( threads_.cbegin(), threads_.cend(), []( const std::unique_ptr< std::thread >& t ) {
-            if ( t->joinable() ) {
-                t->join();
+        std::for_each( threads_.begin(), threads_.end(), []( std::thread& t ) {
+            if ( t.joinable() ) {
+                t.join();
             }
         } );
     }
@@ -59,21 +59,22 @@ public:
 
 private:
     void create_threads( const size_t n ) {
-        for ( size_t i = 0; i < n; ++i ) {
-            auto t = std::make_unique< std::thread >( [ this ]() {
-                while ( !is_stop_ ) {
-                    if ( !tasks_.empty() ) {
-                        auto tasks = tasks_.get_data();
-                        while ( !tasks.empty() ) {
-                            auto t = tasks.front();
-                            tasks.pop();
-                            std::cout << "i am thread:" << std::this_thread::get_id() << std::endl;
-                            t();
-                        }
-                    }
+        std::transform( threads_.begin(), threads_.end(), threads_.begin(), [ this ]( std::thread& t ) {
+            t = std::thread( &thread_pool::work_func, this );
+            return std::move( t );
+        } );
+    }
+
+    void work_func() {
+        while ( !is_stop_ ) {
+            if ( !tasks_.empty() ) {
+                auto tasks = tasks_.get_data();
+                while ( !tasks.empty() ) {
+                    auto t = tasks.front();
+                    tasks.pop();
+                    t();
                 }
-            } );
-            threads_.emplace_back( std::move( t ) );
+            }
         }
     }
 
@@ -82,7 +83,7 @@ private:
     task_queue tasks_;
     size_t     threads_count_;
 
-    std::vector< std::unique_ptr< std::thread > > threads_;
+    std::vector< std::thread > threads_;
 };
 }  // namespace jz
 #endif
