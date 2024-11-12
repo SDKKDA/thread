@@ -3,12 +3,21 @@
 #include "Task.hpp"
 #include "ThreadSafeQueue.hpp"
 #include <algorithm>
+#include <atomic>
 #include <functional>
 #include <thread>
 #include <vector>
 
 namespace jz
 {
+enum class pool_state
+{
+    closed,
+    running,
+    paused,
+    waitting
+};
+
 class thread_pool
 {
 public:
@@ -22,22 +31,26 @@ public:
     thread_pool& operator=( thread_pool&& )      = delete;
 
 public:
-    explicit thread_pool( const size_t threads_count = std::thread::hardware_concurrency() - 1 ) : is_stop_( false ), threads_count_( threads_count ) {
+    explicit thread_pool( const size_t threads_count = std::thread::hardware_concurrency() - 1 ) : threads_count_( threads_count ) {
         threads_.resize( threads_count );
-    }
-    ~thread_pool() {
-        if ( !is_stop_ ) {
-            stop();
-        }
-    }
-    void start() {
         create_threads( threads_count_ );
     }
-    void stop() {
-        {
-            std::unique_lock< std::mutex > ul( tasks_.get_lock() );
-            is_stop_ = true;
+
+    ~thread_pool() {
+        wait_util_done();
+        destroy_pool();
+    }
+
+    void wait_util_done() {
+        if ( is_closed() || is_paused() ) {
+            return;
         }
+        std::unique_lock< std::mutex > ul( mutex_ );
+        state_ = pool_state::waitting;
+        done_cond_.wait( ul, [ this ]() { return tasks_.empty(); } );
+    }
+    void destroy_pool() {
+        cond_.notify_all();
         tasks_.get_cond().notify_all();
         std::for_each( threads_.begin(), threads_.end(), []( std::thread& t ) {
             if ( t.joinable() ) {
@@ -45,6 +58,7 @@ public:
             }
         } );
     }
+
     template < typename Func, typename... Args >
     decltype( auto ) add_task( Func&& t, Args... args ) {
         using retType = typename std::result_of< Func( Args... ) >::type;
@@ -57,8 +71,32 @@ public:
         return task->get_future();
     }
 
+    inline void run() {
+        state_ = pool_state::running;
+        cond_.notify_all();
+    }
+
+    inline bool is_closed() const noexcept {
+        return state_ == pool_state::closed;
+    }
+    inline void close() {
+        state_ = pool_state::closed;
+    }
+
+    inline bool is_paused() const noexcept {
+        return state_ == pool_state::paused;
+    }
+
+    inline void pause() {
+        state_ = pool_state::paused;
+    }
+
+    inline bool is_waitting() const noexcept {
+        return state_ == pool_state::waitting;
+    }
+
 private:
-    void create_threads( const size_t n ) {
+    inline void create_threads( const size_t n ) {
         std::transform( threads_.begin(), threads_.end(), threads_.begin(), [ this ]( std::thread& t ) {
             t = std::thread( &thread_pool::work_func, this );
             return std::move( t );
@@ -66,24 +104,42 @@ private:
     }
 
     void work_func() {
-        while ( !is_stop_ ) {
-            if ( !tasks_.empty() ) {
-                auto tasks = tasks_.get_data();
-                while ( !tasks.empty() ) {
-                    auto t = tasks.front();
-                    tasks.pop();
-                    t();
-                }
+        for ( ;; ) {
+            std::unique_lock< std::mutex > ul( mutex_ );
+            cond_.wait( ul, [ this ]() { return !is_paused(); } );
+            if ( is_closed() ) {
+                break;
+            }
+
+            auto task = tasks_.pop();
+            task();
+            if ( state_ == pool_state::waitting && tasks_.empty() ) {
+                done_cond_.notify_all();
             }
         }
     }
 
 private:
-    bool       is_stop_;
+    // safe queue that stores the tasks
     task_queue tasks_;
-    size_t     threads_count_;
 
+    // the number of threads
+    size_t threads_count_;
+
+    // store work-threads
     std::vector< std::thread > threads_;
+
+    // a thread that manages work-threads
+    std::thread manager_;
+
+    // record the state of the thread_pool
+    std::atomic< pool_state > state_{ pool_state::closed };
+
+    std::condition_variable cond_;
+
+    std::condition_variable done_cond_;
+
+    std::mutex mutex_;
 };
 }  // namespace jz
 #endif
