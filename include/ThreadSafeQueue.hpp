@@ -7,79 +7,79 @@
 
 namespace jz
 {
-template < typename T >
+template < class _Ty >
 class thread_safe_queue
 {
 public:
-    using value_type      = T;
-    using reference       = T&;
-    using const_reference = const T&;
-    using pointer         = T*;
-    using const_pointer   = const T*;
+    using value_type      = _Ty;
+    using reference       = _Ty&;
+    using const_reference = const _Ty&;
+    using pointer         = _Ty*;
+    using const_pointer   = const _Ty*;
 
 public:
     thread_safe_queue() = default;
-    thread_safe_queue( thread_safe_queue&& other ) {
-        std::lock_guard< std::mutex > lg( other.mutex_ );
-        std::swap( data_, other.data_ );
+    thread_safe_queue( thread_safe_queue&& _Oth ) {
+        std::lock_guard< std::mutex > _Lgd( _Oth._Mutex );
+        std::swap( _Data, _Oth._Data );
     }
-    thread_safe_queue& operator=( thread_safe_queue&& other ) {
-        if ( this == &other ) {
+    thread_safe_queue& operator=( thread_safe_queue&& _Oth ) {
+        if ( this == &_Oth ) {
             return *this;
         }
-        std::lock_guard< std::mutex > lg( mutex_, other.mutex_ );
-        std::swap( data_, other.data_ );
+        std::lock_guard< std::mutex > _Lgd( _Mutex, _Oth._Mutex );
+        std::swap( _Data, _Oth._Data );
     }
-    void push( const value_type& value ) {
+    void push( const value_type& _Val ) {
         {
-            std::lock_guard< std::mutex > lg( mutex_ );
-            data_.emplace( value );
+            std::lock_guard< std::mutex > _Lgd( _Mutex );
+            _Data.emplace( _Val );
         }
         // std::cout << "notify_one" << std::endl;
 
-        cond_.notify_one();
+        _Cond.notify_one();
     }
-    void push( value_type&& value ) {
+    void push( value_type&& _Val ) {
         {
-            std::lock_guard< std::mutex > lg( mutex_ );
-            data_.emplace( std::move( value ) );
+            std::lock_guard< std::mutex > _Lgd( _Mutex );
+            _Data.emplace( std::move( _Val ) );
         }
         // std::cout << "notify_one" << std::endl;
 
-        cond_.notify_one();
+        _Cond.notify_one();
     }
     value_type pop() {
-        std::unique_lock< std::mutex > ul( mutex_ );
-        cond_.wait( ul, [ this ]() { return !data_.empty(); } );
+        std::unique_lock< std::mutex > _Ulck( _Mutex );
+        _Cond.wait( _Ulck, [ this ]() { return !_Data.empty(); } );
 
-        auto value = data_.front();
-        data_.pop();
-        return value;
+        auto _Val = _Data.front();
+        _Data.pop();
+        return _Val;
     }
-    void pop( reference value ) {
-        value = std::move( this->pop() );
+    void pop( reference _Val ) {
+        _Val = std::move( this->pop() );
     }
 
     bool empty() const {
-        std::lock_guard< std::mutex > lg( mutex_ );
-        return data_.empty();
+        std::lock_guard< std::mutex > _Lgd( _Mutex );
+        return _Data.empty();
     }
     size_t size() const {
-        std::lock_guard< std::mutex > lg( mutex_ );
-        return data_.size();
+        std::lock_guard< std::mutex > _Lgd( _Mutex );
+        return _Data.size();
     }
     std::queue< value_type > get_data() {
-        std::unique_lock< std::mutex > ul( mutex_ );
-        cond_.wait( ul, [ this ]() { return !data_.empty(); } );
-        std::queue< value_type > new_queue;
-        std::swap( new_queue, data_ );
-        return new_queue;
+        std::unique_lock< std::mutex > _Ulck( _Mutex );
+        _Cond.wait( _Ulck, [ this ]() { return !_Data.empty(); } );
+        std::queue< value_type > _New_Queue;
+        _New_Queue.swap( _Data );
+        return _New_Queue;
     }
     std::condition_variable& get_cond() {
-        return cond_;
+        return _Cond;
     }
     std::mutex& get_lock() {
-        return mutex_;
+        return _Mutex;
     }
     ~thread_safe_queue() = default;
 
@@ -88,9 +88,9 @@ public:
     thread_safe_queue& operator=( const thread_safe_queue& ) = delete;
 
 private:
-    mutable std::mutex              mutex_;
-    std::queue< value_type >        data_;
-    mutable std::condition_variable cond_;
+    mutable std::mutex              _Mutex;
+    std::queue< value_type >        _Data;
+    mutable std::condition_variable _Cond;
 };
 }  // namespace jz
 #endif
